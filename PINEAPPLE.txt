@@ -1,0 +1,314 @@
+NETCORE FULL SWEEP PINEAPPLE EXPORT
+
+Canonical Engineering Snapshot + Roadmap
+Version Context: NETCORE_v0.1.2
+
+PROJECT IDENTITY
+
+Name: NETCORE
+Aliases: IT Watch, NETCORE Field Terminal
+Platform: ESP32-S3 (Arduino framework)
+Display: ILI9341 SPI TFT
+Rendering Stack: Adafruit_ILI9341 + Adafruit_GFX (direct draw only)
+Simulation: Wokwi ESP32-S3 DevKitC-1 + ILI9341
+Hardware Target: Custom wearable PCB (future), horizontal wrist orientation
+
+Direct draw policy:
+No framebuffers.
+No TFT_eSPI sprites.
+No full offscreen rendering layer.
+
+NON-NEGOTIABLE ENGINEERING RULES
+
+No delay() inside tick paths.
+
+No heap allocation inside hot paths.
+
+Dirty rectangle redraw only during runtime ticks.
+
+Full-screen redraw allowed only in:
+
+enter()
+
+mode switch
+
+Deterministic service execution order.
+
+Animation must use Q16.16 fixed-point.
+
+Animation engine must use fixed pools only.
+
+No architectural refactors without version bump.
+
+Patch surgically. Never overwrite entire files unless absolutely required.
+
+Version discipline:
+
+Bugfix → X.Y.Z+1
+
+Feature → X.Y+1.0
+
+Refactor → X+1.0.0
+
+CANONICAL SOURCE OF TRUTH (ZIP INSPECTION)
+
+Top-level (observed):
+
+sketch.ino
+
+netcore_apps.cpp
+
+netcore_ui.cpp
+
+netcore_config.h
+
+svc_anim.h
+
+svc_anim.cpp
+
+svc_statusbar.*
+
+svc_notify.*
+
+svc_perf.*
+
+svc_time.*
+
+svc_wifi.*
+
+netcore_buttons.*
+
+netcore_settings.*
+
+netcore_sd.*
+
+UNKNOWN: exact full file list must be confirmed by listing zip.
+
+tft Definition:
+Defined in sketch.ino:
+Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC, TFT_RST);
+
+Extern Pattern:
+Files that require display use extern reference via netcore_config.h.
+
+Theme Abstraction:
+COL_BG()
+COL_FG()
+COL_DIM()
+COL_HILITE()
+COL_DARK()
+
+Defined in theme header (exact filename UNKNOWN — confirm in zip).
+
+Direct draw enforced by:
+No framebuffer allocation.
+No sprite instantiation.
+All rendering calls go directly to tft object.
+
+RUNTIME ARCHITECTURE SNAPSHOT
+setup() init order
+
+Observed architecture:
+
+timeSvc
+wifiSvc
+notifySvc
+statusBarSvc
+taskSvc
+perfSvc
+animSvc
+eventBus
+haptics
+airSvc
+tempIrSvc
+rfidSvc
+
+UNKNOWN: exact order must be verified in sketch.ino.
+
+loop() order
+
+Buttons::poll
+inputSvcTick
+eventBusTick
+timeSvcTick
+wifiSvcTick
+notifySvcTick
+statusBarTick
+taskSvcTick
+animSvcTick(budgetUs)
+hapticsTick
+airSvcTick
+tempIrTick
+rfidSvcTick
+UI mode handling
+appsTick
+perfLoopEnd
+
+Deterministic ordering enforced.
+
+Perf metrics:
+svc_perf present.
+Budget passed into animSvcTick.
+
+APP FRAMEWORK SNAPSHOT
+
+Defined in netcore_apps.cpp:
+
+Mode mode
+int runningApp
+App apps[]
+const int APP_COUNT
+void appsTick()
+
+App lifecycle:
+enter()
+tick()
+exit()
+
+Menu logic handled in netcore_ui.cpp.
+
+ANIMATION ENGINE
+
+Files:
+svc_anim.h
+svc_anim.cpp
+
+Public API (observed):
+
+animGetQ(target, prop)
+animSetQ(target, prop, value)
+animTween(target, prop, from, to, duration, easing, flags)
+animCancelTarget(target)
+animSvcTick(budgetUs)
+
+Fixed pool tweens.
+No dynamic allocation.
+Q16.16 fixed point (16 fractional bits).
+Budget enforced per tick.
+
+ANIM DEMO + PROGRESS BAR (CURRENT GOOD STATE)
+
+Geometry:
+PB_X = 30
+PB_Y = 170
+PB_W = 180
+PB_H = 12
+PB_BORDER = 1
+
+Strategy:
+
+Border drawn each frame (small cost acceptable).
+
+Previous fill width cached.
+
+Q16 progress converted using:
+
+(int64 innerW * qProgress) >> 16
+
+First draw clears interior.
+
+Grow → fill delta only.
+
+Shrink → clear delta only.
+
+No fillScreen during tick.
+
+No residual pixels.
+
+Remaining edge cases:
+None observed in v0.1.2.
+UNKNOWN: test under extreme rapid tween reversal.
+
+FEATURE MAP NORMALIZATION
+
+Implemented (verified by inspection):
+
+App registry
+
+Animation engine
+
+Q16 tween system
+
+ANIM demo dirty redraw
+
+Service tick pipeline
+
+Theme abstraction
+
+Status bar framework
+
+Perf service
+
+SD presence flag
+
+In Progress (stubs exist):
+
+WiFi UI
+
+Port tools
+
+Notes app
+
+Cartridge SD UI
+
+Inject/HID placeholder
+
+Settings UI scaffold
+
+Planned (no code observed):
+
+USB HID macro execution
+
+Alien cassette-futurism UI pass
+
+Advanced animation transitions
+
+SD cartridge spec enforcement
+
+Network diagnostic tooling
+
+IR temp + air quality visualization
+
+UNKNOWN:
+
+EventBus full implementation detail
+
+Haptics full integration detail
+
+VERSIONING PLAYBOOK
+
+Current version: NETCORE_v0.1.2
+
+Rules:
+Bugfix → increment patch.
+Feature → increment minor.
+Refactor → increment major.
+
+Patch Discipline:
+Never overwrite netcore_apps.cpp wholesale.
+Never remove global symbols.
+Always compile + link green before adding features.
+
+INTEGRITY + REGRESSION CHECKLIST
+
+Every patch must verify:
+
+Compile success
+
+Link success
+
+No undefined symbols
+
+No fillScreen in tick paths
+
+No heap churn in tick
+
+apps[] unchanged unless intentional feature
+
+ANIM demo clean
+
+Menu navigation intact
+
+Status bar ticks during animation
+
+No service starvation

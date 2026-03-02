@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "author": "NETCORE",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "board-esp32-s3-devkitc-1",
+      "id": "esp",
+      "top": -364.98,
+      "left": -139.43,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-ili9341",
+      "id": "lcd1",
+      "top": -458.5,
+      "left": -407.6,
+      "rotate": 270,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-ky-040",
+      "id": "enc1",
+      "top": -199.9,
+      "left": -423.2,
+      "attrs": { "label": "NAV" }
+    },
+    {
+      "type": "wokwi-pushbutton-6mm",
+      "id": "btnBack",
+      "top": -146.2,
+      "left": -297.6,
+      "attrs": { "color": "red", "xray": "1", "label": "BACK" }
+    },
+    { "type": "wokwi-microsd-card", "id": "sd1", "top": -450.97, "left": -134.33, "attrs": {} },
+    {
+      "type": "wokwi-led",
+      "id": "vibe1",
+      "top": -109.2,
+      "left": -236.2,
+      "attrs": { "color": "yellow", "label": "HAPTIC" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "rfidLed1",
+      "top": -109.2,
+      "left": -188.2,
+      "attrs": { "color": "green", "label": "RFID-CS" }
+    }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:3V3.1", "lcd1:VCC", "red", [ "v0" ] ],
+    [ "esp:GND.2", "lcd1:GND", "black", [ "v0" ] ],
+    [ "esp:36", "lcd1:SCK", "blue", [ "v0" ] ],
+    [ "esp:35", "lcd1:MOSI", "green", [ "v0" ] ],
+    [ "esp:37", "lcd1:MISO", "orange", [ "v0" ] ],
+    [ "esp:38", "lcd1:CS", "purple", [ "v0" ] ],
+    [ "esp:39", "lcd1:D/C", "gray", [ "v0" ] ],
+    [ "esp:40", "lcd1:RST", "brown", [ "v0" ] ],
+    [ "esp:3V3.1", "lcd1:LED", "red", [ "v0" ] ],
+    [ "esp:4", "enc1:CLK", "white", [ "v0" ] ],
+    [ "esp:5", "enc1:DT", "yellow", [ "v0" ] ],
+    [ "esp:6", "enc1:SW", "cyan", [ "v0" ] ],
+    [ "esp:GND.2", "enc1:GND", "black", [ "v0" ] ],
+    [ "esp:21", "btnBack:1.l", "white", [ "v0" ] ],
+    [ "esp:GND.2", "btnBack:2.l", "black", [ "v0" ] ],
+    [ "esp:3V3.2", "sd1:VCC", "red", [ "v0" ] ],
+    [ "esp:GND.1", "sd1:GND", "black", [ "v0" ] ],
+    [ "esp:GND.2", "sd1:CD", "black", [ "v0" ] ],
+    [ "esp:36", "sd1:SCK", "blue", [ "v0" ] ],
+    [ "esp:35", "sd1:DI", "green", [ "v0" ] ],
+    [ "esp:37", "sd1:DO", "orange", [ "v0" ] ],
+    [ "esp:10", "sd1:CS", "purple", [ "v0" ] ],
+    [ "esp:3V3.1", "enc1:+", "red", [ "v0" ] ],
+    [ "esp:47", "vibe1:A", "yellow", [] ],
+    [ "esp:GND.1", "vibe1:K", "black", [] ],
+    [ "esp:14", "rfidLed1:A", "green", [] ],
+    [ "esp:GND.1", "rfidLed1:K", "black", [] ]
+  ],
+  "dependencies": {}
+}
