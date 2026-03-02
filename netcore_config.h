@@ -4,7 +4,7 @@
 #include <Adafruit_ILI9341.h>
 #include <Preferences.h>
 
-#define FW_VERSION "1.1.4"
+#define FW_VERSION "1.2.0"
 
 // ── Display pins (FSPI) ───────────────────────────────────────────────────────
 #define TFT_CS   38

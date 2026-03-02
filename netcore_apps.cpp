@@ -778,133 +778,254 @@ static void appSettingsTick() {
 static void appSettingsExit() {}
 
 // ── SYSTEM (basic live view) ────────────────────────────────────────────────
+static void systemResetState();
+
 static void appSystemEnter() {
-  appChromeEnter("SYSTEM", "STATUS", "BACK menu");
+  appChromeEnter("SYSTEM", "TABS", "BACK menu");
+  systemResetState();
 }
 
-// Alien-style bars for SYSTEM/SENS pages (row-level redraw)
-static void drawBarRow(int row, const char* label, float value, float vmin, float vmax, uint16_t col) {
-  char txt[32];
-  snprintf(txt, sizeof(txt), "%s", label);
-  drawLine(row, false, txt);
+enum SystemTab : uint8_t {
+  SYS_TAB_SENSORS = 0,
+  SYS_TAB_RF,
+  SYS_TAB_IDENT,
+  SYS_TAB_STATUS,
+  SYS_TAB_COUNT
+};
 
-  int x0 = 120;
-  int y0 = BODY_Y + row*LINE_H;
-  int w  = 240 - x0 - 10;
-  int h  = LINE_H;
+static const int SYS_TAB_Y = BODY_Y + 2;
+static const int SYS_TAB_H = 14;
+static const int SYS_BODY_TOP = SYS_TAB_Y + SYS_TAB_H + 4;
+static const int SYS_BODY_H = H - FOOTER_H - SYS_BODY_TOP;
+static const int SYS_SEG_THICK = 4;
 
-  tft.fillRect(x0, y0, w, h, COL_DARK());
+struct SegDial {
+  int16_t cx;
+  int16_t cy;
+  int16_t minV;
+  int16_t maxV;
+  int16_t warnV;
+  int16_t critV;
+  uint8_t segCount;
+  int16_t sx0[24];
+  int16_t sy0[24];
+  int16_t sx1[24];
+  int16_t sy1[24];
+  int16_t prevActive;
+};
 
-  float t = 0.0f;
-  if (vmax > vmin) t = (value - vmin) / (vmax - vmin);
-  if (t < 0) t = 0;
-  if (t > 1) t = 1;
-  int bw = (int)(t * (float)w);
-  if (bw > 0) tft.fillRect(x0, y0, bw, h, col);
+static SegDial s_sysDials[3];
+static bool s_sysDialGeomInit = false;
+static int s_sysTab = 0;
+static int s_sysPrevTab = -1;
+static bool s_sysFocus = false;
+static uint32_t s_sysLastMs = 0;
+static uint8_t s_rfBlinkState = 0;
 
-  char vbuf[20];
-  if (vmax >= 1000) snprintf(vbuf, sizeof(vbuf), "%.0f", value);
-  else snprintf(vbuf, sizeof(vbuf), "%.1f", value);
+static void systemResetState() {
+  s_sysTab = 0;
+  s_sysPrevTab = -1;
+  s_sysFocus = false;
+  s_sysLastMs = 0;
+}
+
+static int clampI32(int v, int lo, int hi) {
+  if (v < lo) return lo;
+  if (v > hi) return hi;
+  return v;
+}
+
+static uint16_t dialZoneColor(const SegDial& d, uint8_t idx) {
+  int valueAtSeg = d.minV + (((int)(idx + 1) * (d.maxV - d.minV)) / d.segCount);
+  if (valueAtSeg >= d.critV) return COL_BAD();
+  if (valueAtSeg >= d.warnV) return COL_WARN();
+  return COL_HILITE();
+}
+
+static void dialInitGeom(SegDial& d) {
+  const int r0 = 18;
+  const int r1 = 26;
+  const int a0 = -150;
+  const int a1 =  150;
+  for (uint8_t i = 0; i < d.segCount; i++) {
+    int a = a0 + ((a1 - a0) * (int)i) / (int)(d.segCount - 1);
+    float ar = (float)a * 0.0174532925f;
+    int cs = (int)(cosf(ar) * 1024.0f);
+    int sn = (int)(sinf(ar) * 1024.0f);
+    d.sx0[i] = d.cx + (int16_t)((r0 * cs) / 1024);
+    d.sy0[i] = d.cy + (int16_t)((r0 * sn) / 1024);
+    d.sx1[i] = d.cx + (int16_t)((r1 * cs) / 1024);
+    d.sy1[i] = d.cy + (int16_t)((r1 * sn) / 1024);
+  }
+  d.prevActive = -1;
+}
+
+static int dialActiveSegments(const SegDial& d, int value) {
+  int clamped = clampI32(value, d.minV, d.maxV);
+  int span = d.maxV - d.minV;
+  if (span <= 0) return 0;
+  return clampI32(((clamped - d.minV) * d.segCount) / span, 0, d.segCount);
+}
+
+static void dialDrawDelta(SegDial& d, int value) {
+  int active = dialActiveSegments(d, value);
+  if (active == d.prevActive) return;
+
+  int lo = d.prevActive;
+  int hi = active;
+  if (lo > hi) { int t = lo; lo = hi; hi = t; }
+  if (lo < 0) lo = 0;
+
+  for (int i = lo; i < hi; i++) {
+    bool on = (i < active);
+    uint16_t col = on ? dialZoneColor(d, (uint8_t)i) : COL_DARK();
+    tft.drawLine(d.sx0[i], d.sy0[i], d.sx1[i], d.sy1[i], col);
+    tft.drawLine(d.sx0[i], d.sy0[i] + 1, d.sx1[i], d.sy1[i] + 1, col);
+  }
+  d.prevActive = active;
+}
+
+static void systemDrawTabs() {
+  static const char* TABS[SYS_TAB_COUNT] = { "SENSORS", "RF", "IDENT", "STATUS" };
+  static const int TAB_W[SYS_TAB_COUNT]  = { 70, 40, 56, 62 };
+
+  int x = 8;
+  for (int i = 0; i < SYS_TAB_COUNT; i++) {
+    bool active = (i == s_sysTab);
+    uint16_t fg = active ? COL_BG() : COL_FG();
+    uint16_t bg = active ? COL_HILITE() : COL_BG();
+    tft.fillRect(x, SYS_TAB_Y, TAB_W[i], SYS_TAB_H, bg);
+    tft.drawRect(x, SYS_TAB_Y, TAB_W[i], SYS_TAB_H, COL_DARK());
+    tft.setTextSize(1);
+    tft.setTextColor(fg, bg);
+    tft.setCursor(x + 4, SYS_TAB_Y + 3);
+    tft.print(TABS[i]);
+    x += TAB_W[i] + 4;
+  }
+}
+
+static void systemClearBody() {
+  tft.fillRect(0, SYS_BODY_TOP, W, SYS_BODY_H, COL_BG());
+}
+
+static void systemInitDials() {
+  s_sysDials[0] = { 56, SYS_BODY_TOP + 46, 50, 140, 95, 110, 20, {0}, {0}, {0}, {0}, -1 };
+  s_sysDials[1] = { 160, SYS_BODY_TOP + 46, 40, 110, 85, 100, 20, {0}, {0}, {0}, {0}, -1 };
+  s_sysDials[2] = { 264, SYS_BODY_TOP + 46, 400, 2000, 1000, 1500, 20, {0}, {0}, {0}, {0}, -1 };
+  for (int i = 0; i < 3; i++) dialInitGeom(s_sysDials[i]);
+  s_sysDialGeomInit = true;
+}
+
+static void systemDrawSensorStatic() {
   tft.setTextSize(1);
-  tft.setTextColor(COL_FG(), COL_BG());
-  tft.setCursor(x0 + 2, y0 + 2);
-  tft.print(vbuf);
+  tft.setTextColor(COL_DIM(), COL_BG());
+  tft.setCursor(26, SYS_BODY_TOP + 8); tft.print("IR OBJ");
+  tft.setCursor(132, SYS_BODY_TOP + 8); tft.print("IR AMB");
+  tft.setCursor(238, SYS_BODY_TOP + 8); tft.print("AIR");
+  tft.drawFastHLine(8, SYS_BODY_TOP + 84, W - 16, COL_DARK());
+}
+
+static void systemDrawHSeg(int x, int y, int segs, int active, uint16_t col) {
+  const int sw = 8;
+  const int sh = SYS_SEG_THICK;
+  for (int i = 0; i < segs; i++) {
+    uint16_t c = (i < active) ? col : COL_DARK();
+    tft.fillRect(x + i * (sw + 2), y, sw, sh, c);
+  }
 }
 
 static void appSystemTick() {
-  // Pages: 0=PERF, 1=SENS, 2=RFID/NFC
-  static int s_page = 0;
-  static int s_prevPage = -1;
-  static uint32_t last = 0;
+  if (!s_sysDialGeomInit) systemInitDials();
 
-  if (Buttons::up::consume())   { if (s_page > 0) s_page--; }
-  if (Buttons::down::consume()) { if (s_page < 2) s_page++; }
-
-  uint32_t now = millis();
-  bool timeDue = (now - last) >= 500;
-  bool pageChanged = (s_page != s_prevPage);
-
-  if (!timeDue && !pageChanged) return;
-  if (timeDue) last = now;
-
-  // Clear all rows on page change to avoid leftovers.
-  if (pageChanged) {
-    for (int i = 0; i < 6; i++) drawLine(i, false, "");
-    s_prevPage = s_page;
+  if (!s_sysFocus) {
+    if (Buttons::up::consume() && s_sysTab > 0) s_sysTab--;
+    if (Buttons::down::consume() && s_sysTab < (SYS_TAB_COUNT - 1)) s_sysTab++;
+    if (Buttons::select.consume()) s_sysFocus = true;
+  } else if (Buttons::back.consume()) {
+    s_sysFocus = false;
   }
 
-  if (s_page == 0) {
-    // PERF (Alien bars)
-    drawBarRow(0, "CPU%", (float)perfGetCpuPercent(), 0, 100, COL_HILITE());
-    drawBarRow(1, "FPS",  (float)perfGetFps(),        0, 60,  COL_DIM());
-    drawBarRow(2, "DRAW", (float)perfGetDrawCount(),  0, 400, COL_DIM());
+  uint32_t now = millis();
+  bool tabChanged = (s_sysTab != s_sysPrevTab);
+  bool due = (now - s_sysLastMs) >= 250;
+  if (!tabChanged && !due) return;
+  if (due) s_sysLastMs = now;
 
-    const char* ip = wifiSvcGetIP(); if (!ip) ip = "";
-    char l3[48];
-    snprintf(l3, sizeof(l3), "IP:%s", ip);
-    drawLine(3, false, l3);
+  if (tabChanged) {
+    systemDrawTabs();
+    systemClearBody();
+    for (int i = 0; i < 3; i++) s_sysDials[i].prevActive = -1;
+    s_sysPrevTab = s_sysTab;
+  }
 
-    char l4[48];
-    snprintf(l4, sizeof(l4), "SD:%s Payloads:%d", sdPresent ? "Y" : "N", (int)payloadCount);
-    drawLine(4, false, l4);
-
-    drawLine(5, false, "UP/DN: Pages");
-  } else if (s_page == 1) {
-    // SENSORS (threshold bands)
-    const float TEMP_WARN_F = 95.0f;
-    const float TEMP_BAD_F  = 110.0f;
-    const float AIR_SAFE_MAX = 1000.0f;
-    const float AIR_WARN_MAX = 1500.0f;
-
-    float objF = 0.0f;
-    float ambF = 0.0f;
+  if (s_sysTab == SYS_TAB_SENSORS) {
+    if (tabChanged) systemDrawSensorStatic();
+    int objF = 0;
+    int ambF = 0;
     if (tempIrHasData()) {
-      objF = tempIrObjectC() * 9.0f/5.0f + 32.0f;
-      ambF = tempIrAmbientC() * 9.0f/5.0f + 32.0f;
+      objF = (int)((tempIrObjectC() * 9.0f / 5.0f) + 32.0f);
+      ambF = (int)((tempIrAmbientC() * 9.0f / 5.0f) + 32.0f);
     }
-    uint16_t tcol = COL_OK();
-    if (objF >= TEMP_BAD_F) tcol = COL_BAD();
-    else if (objF >= TEMP_WARN_F) tcol = COL_WARN();
-    drawBarRow(0, "IR OBJ F", objF, 60, 140, tcol);
-    drawBarRow(1, "IR AMB F", ambF, 40, 110, COL_DIM());
+    int co2 = (int)airSvcCO2ppm();
+    dialDrawDelta(s_sysDials[0], objF);
+    dialDrawDelta(s_sysDials[1], ambF);
+    dialDrawDelta(s_sysDials[2], co2);
 
-    float co2 = (float)airSvcCO2ppm();
-    uint16_t acol = COL_OK();
-    if (co2 >= AIR_WARN_MAX) acol = COL_BAD();
-    else if (co2 >= AIR_SAFE_MAX) acol = COL_WARN();
-    drawBarRow(2, "CO2 PPM", co2, 400, 2000, acol);
-
-    char l3[48];
-    snprintf(l3, sizeof(l3), "AIR LVL:%d", (int)airSvcAlertLevel());
-    drawLine(3, false, l3);
-    drawLine(4, false, "UP/DN: Pages");
-    drawLine(5, false, "");
-  } else {
-    // RFID / NFC
+    systemDrawHSeg(16,  SYS_BODY_TOP + 96, 10, clampI32((int)((millis() / 1000UL) % 100) / 10, 0, 10), COL_HILITE());
+    systemDrawHSeg(120, SYS_BODY_TOP + 96, 10, wifiSvcIsConnected() ? 9 : 2, COL_DIM());
+    systemDrawHSeg(224, SYS_BODY_TOP + 96, 10, clampI32((int)perfGetCpuPercent() / 10, 0, 10), COL_WARN());
+  } else if (s_sysTab == SYS_TAB_RF) {
     if (Buttons::select.consume()) {
       rfidSvcSetArmed(!rfidSvcIsArmed());
-      notifySvcPost(NOTIFY_INFO, "RFID", rfidSvcIsArmed() ? "ARMED" : "OFF", 800);
     }
-
-    char l0[48];
-    snprintf(l0, sizeof(l0), "RFID:%s  Reads:%lu", rfidSvcIsArmed() ? "ARM" : "OFF", (unsigned long)rfidSvcScanCount());
-    drawLine(0, false, l0);
-
-    char uid[RFID_UID_STR_LEN];
-    uid[0] = '\0';
+    if ((now / 400) != ((now - 250) / 400)) s_rfBlinkState ^= 1;
+    tft.drawRect(12, SYS_BODY_TOP + 6, 144, 48, COL_DARK());
+    tft.drawRect(164, SYS_BODY_TOP + 6, 144, 48, COL_DARK());
+    tft.fillRect(20, SYS_BODY_TOP + 16, 8, 8, rfidSvcIsArmed() && s_rfBlinkState ? COL_WARN() : COL_DARK());
+    tft.fillRect(172, SYS_BODY_TOP + 16, 8, 8, COL_DARK());
+    tft.setTextSize(1);
+    tft.setTextColor(COL_FG(), COL_BG());
+    tft.setCursor(32, SYS_BODY_TOP + 16); tft.print("RFID");
+    tft.setCursor(184, SYS_BODY_TOP + 16); tft.print("NFC");
+    char uid[RFID_UID_STR_LEN]; uid[0] = '\0';
     (void)rfidSvcGetLastUid(uid, (int)sizeof(uid));
-    char l1[48];
-    snprintf(l1, sizeof(l1), "UID:%s", uid[0] ? uid : "(none)");
-    drawLine(1, false, l1);
-
-    drawLine(2, false, "NFC: spec-only");
-    drawLine(3, false, "(no svc_nfc.cpp yet)");
-    drawLine(4, false, "SEL: toggle RFID");
-    drawLine(5, false, "UP/DN: Pages");
+    tft.fillRect(12, SYS_BODY_TOP + 64, W - 24, 28, COL_BG());
+    tft.setCursor(16, SYS_BODY_TOP + 68); tft.print("UID:"); tft.print(uid[0] ? uid : "(none)");
+    tft.setCursor(16, SYS_BODY_TOP + 80); tft.print("Reads:"); tft.print((unsigned long)rfidSvcScanCount());
+  } else if (s_sysTab == SYS_TAB_IDENT) {
+    const char* ip = wifiSvcGetIP(); if (!ip) ip = "-";
+    tft.drawRect(12, SYS_BODY_TOP + 6, W - 24, 90, COL_DARK());
+    tft.drawFastVLine(110, SYS_BODY_TOP + 6, 90, COL_DARK());
+    tft.setTextSize(1);
+    tft.setTextColor(COL_DIM(), COL_BG());
+    tft.setCursor(18, SYS_BODY_TOP + 14); tft.print("FW");
+    tft.setCursor(18, SYS_BODY_TOP + 28); tft.print("UPTIME");
+    tft.setCursor(18, SYS_BODY_TOP + 42); tft.print("MAC");
+    tft.setCursor(18, SYS_BODY_TOP + 56); tft.print("IP");
+    tft.setCursor(18, SYS_BODY_TOP + 70); tft.print("GW");
+    tft.setTextColor(COL_FG(), COL_BG());
+    tft.setCursor(118, SYS_BODY_TOP + 14); tft.print(FW_VERSION);
+    tft.setCursor(118, SYS_BODY_TOP + 28); tft.print((unsigned long)(millis() / 1000UL)); tft.print("s");
+    tft.setCursor(118, SYS_BODY_TOP + 42); tft.print(WiFi.macAddress());
+    tft.setCursor(118, SYS_BODY_TOP + 56); tft.print(ip);
+    tft.setCursor(118, SYS_BODY_TOP + 70); tft.print(WiFi.gatewayIP());
+  } else {
+    systemDrawHSeg(20, SYS_BODY_TOP + 18, 12, clampI32((int)(ESP.getFreeHeap() / 12000), 0, 12), COL_HILITE());
+    systemDrawHSeg(20, SYS_BODY_TOP + 38, 12, wifiSvcIsConnected() ? 12 : 3, COL_WARN());
+    systemDrawHSeg(20, SYS_BODY_TOP + 58, 12, sdPresent ? 12 : 0, COL_DIM());
+    systemDrawHSeg(20, SYS_BODY_TOP + 78, 12, bleSvcIsEnabled() ? 12 : 0, COL_BAD());
+    tft.setTextSize(1);
+    tft.setTextColor(COL_DIM(), COL_BG());
+    tft.setCursor(140, SYS_BODY_TOP + 18); tft.print("HEAP");
+    tft.setCursor(140, SYS_BODY_TOP + 38); tft.print("WIFI");
+    tft.setCursor(140, SYS_BODY_TOP + 58); tft.print("SD");
+    tft.setCursor(140, SYS_BODY_TOP + 78); tft.print("BLE");
   }
 }
 
-static void appSystemExit() {}
+static void appSystemExit() {
+  s_sysFocus = false;
+}
 
 App apps[] = {
   { "ANIM",     "DEMO",     appAnimEnter,     appAnimTick,     appAnimExit },
