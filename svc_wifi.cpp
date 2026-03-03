@@ -24,6 +24,13 @@ static char _savedSsid[WIFI_SVC_SSID_LEN] = "";
 static char _savedPass[WIFI_SVC_PASS_LEN] = "";
 static bool _autoConnect = true;
 
+// wifiSvcConnect() is often triggered from UI tick paths.
+// Keep it non-blocking by arming WiFi.begin() to be issued from wifiSvcTick()
+// after a short radio-reset window instead of delay().
+static bool     _beginPending = false;
+static uint32_t _beginAtMs    = 0;
+static bool     _beginIssued  = false;
+
 // ── Scan results ─────────────────────────────────────────────────────────────
 static WifiSvcNet _nets[WIFI_SVC_MAX_NETS];
 static int        _netCount   = 0;
@@ -126,6 +133,15 @@ void wifiSvcInit() {
 }
 
 void wifiSvcTick() {
+  // Non-blocking connect arming: issue WiFi.begin() once the short radio-reset
+  // window has elapsed. This avoids delay() inside any tick path.
+  if (_beginPending && (int32_t)(millis() - _beginAtMs) >= 0) {
+    WiFi.begin(_savedSsid, _savedPass);
+    _beginPending = false;
+    _beginIssued  = true;
+    _stateMs      = millis();
+  }
+
   switch (_state) {
 
     // ── IDLE — nothing to do; watch for external WiFi events ────────────────
@@ -153,7 +169,9 @@ void wifiSvcTick() {
       if (_scanPending) {
         _scanPending = false;
         if (_savedSsid[0] != '\0') {
-          WiFi.begin(_savedSsid, _savedPass);
+          _beginIssued  = false;
+          _beginPending = true;
+          _beginAtMs    = millis() + 50;
           _setState(WSVC_CONNECTING);
         }
       }
@@ -162,6 +180,9 @@ void wifiSvcTick() {
 
     // ── CONNECTING — poll until connected or timed out ───────────────────────
     case WSVC_CONNECTING: {
+      // If begin() hasn't been issued yet, don't evaluate status/timeouts.
+      if (_beginPending || !_beginIssued) break;
+
       wl_status_t ws = WiFi.status();
       if (ws == WL_CONNECTED) {
         _cacheConnectionInfo();
@@ -247,19 +268,25 @@ void wifiSvcConnect(const char* ssid, const char* pass) {
   _failReason = WFAIL_NONE;   // clear stale reason before each new attempt
   // Do disconnect to trigger fresh auth.
   WiFi.disconnect(true);
-  delay(50);   // allow radio to reset — this is called from user-triggered
-               // action (button press), NOT from a tick/loop path
+
+  // Do NOT delay() here: connect can be triggered from UI tick paths.
+  // Instead, arm begin() to be issued from wifiSvcTick() after a short
+  // radio-reset window.
+  _beginIssued  = false;
+  _beginPending = true;
+  _beginAtMs    = millis() + 50;
   // Store as pending creds (will be saved to NVS on successful connect)
   strncpy(_savedSsid, ssid, WIFI_SVC_SSID_LEN - 1);
   _savedSsid[WIFI_SVC_SSID_LEN - 1] = '\0';
   strncpy(_savedPass, pass, WIFI_SVC_PASS_LEN - 1);
   _savedPass[WIFI_SVC_PASS_LEN - 1] = '\0';
 
-  WiFi.begin(ssid, pass);
   _setState(WSVC_CONNECTING);
 }
 
 void wifiSvcForget() {
+  _beginPending = false;
+  _beginIssued  = false;
   WiFi.disconnect(true);
   prefs.remove(KEY_WIFI_SSID);
   prefs.remove(KEY_WIFI_PASS);
@@ -269,6 +296,8 @@ void wifiSvcForget() {
 }
 
 void wifiSvcDisconnect() {
+  _beginPending = false;
+  _beginIssued  = false;
   WiFi.disconnect(true);
   _setState(WSVC_IDLE);
 }
@@ -353,6 +382,8 @@ void wifiSvcConnectSaved() {
     _scanPending = true;
     return;
   }
-  WiFi.begin(_savedSsid, _savedPass);
+  _beginIssued  = false;
+  _beginPending = true;
+  _beginAtMs    = millis() + 50;
   _setState(WSVC_CONNECTING);
 }

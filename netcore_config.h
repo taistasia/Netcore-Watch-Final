@@ -1,10 +1,38 @@
+// netcore_config.h
 #pragma once
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_ILI9341.h>
 #include <Preferences.h>
 
-#define FW_VERSION "1.1.4"
+#define FW_VERSION "1.1.8"
+
+// ── Build flags ─────────────────────────────────────────────────────────────
+// BLE/ANCS are OFF by default (Wokwi-safe). Enable via build flags or by
+// editing these defines for hardware testing.
+#ifndef NETCORE_BLE_ENABLE
+#  define NETCORE_BLE_ENABLE 0
+#endif
+#ifndef NETCORE_ANCS_ENABLE
+#  define NETCORE_ANCS_ENABLE 0
+#endif
+
+// ── Simulation flags (Wokwi) ───────────────────────────────────────────────
+// IR temperature has no Wokwi part; keep a deterministic mock generator that
+// can be swapped for real MLX90614 later.
+#ifndef NETCORE_SIM_IR_ENABLE
+#  define NETCORE_SIM_IR_ENABLE 1
+#endif
+
+// Air quality in Wokwi uses MQ2 analog as a CO2-proxy feed.
+#ifndef NETCORE_SIM_AIR_MQ2_ENABLE
+#  define NETCORE_SIM_AIR_MQ2_ENABLE 1
+#endif
+
+// Back-compat for existing BLE spec header.
+#ifndef BLE_ENABLED
+#  define BLE_ENABLED (NETCORE_BLE_ENABLE ? 1 : 0)
+#endif
 
 // ── Display pins (FSPI) ───────────────────────────────────────────────────────
 #define TFT_CS   38
@@ -34,6 +62,11 @@
 // svc_air.h re-defines these as AIR_I2C_SDA / AIR_I2C_SCL for clarity.
 #define PIN_I2C_SDA  8
 #define PIN_I2C_SCL  9
+
+// ── MQ2 analog (Air proxy) ────────────────────────────────────────────────
+// ADC-capable pin for MQ2 analog output in Wokwi.
+// Avoid strap pins; GPIO1 is ADC1 and safe on ESP32-S3 DevKitC-1.
+#define PIN_MQ2_ADC  1
 
 // ── RFID scanner (MFRC522) — shares FSPI bus (SCK=36,MISO=37,MOSI=35) ────
 #define RFID_CS_PIN   14   // MFRC522 chip-select

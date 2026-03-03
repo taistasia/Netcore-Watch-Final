@@ -7,6 +7,8 @@ bool     cartLoaded = false;
 CartInfo cartInfo   = {};
 SdFat    sd;
 
+static bool s_justLoaded = false;
+
 int          payloadCount = 0;
 PayloadEntry payloadList[PAYLOAD_MAX];
 
@@ -35,6 +37,7 @@ static bool matchKey(const char* line, const char* key, char* out, int outLen) {
 bool sdInit() {
   sdPresent  = false;
   cartLoaded = false;
+  s_justLoaded = false;
   payloadCount = 0;
   memset(&cartInfo, 0, sizeof(cartInfo));
 
@@ -53,6 +56,7 @@ bool sdInit() {
 
 bool sdLoadManifest() {
   cartLoaded = false;
+  s_justLoaded = false;
   memset(&cartInfo, 0, sizeof(cartInfo));
   if (!sdPresent) return false;
   if (!sd.exists("/CART.TXT")) return false;
@@ -106,7 +110,30 @@ bool sdLoadManifest() {
   }
   f.close();
   cartLoaded = (cartInfo.appCount > 0);
+  if (cartLoaded) s_justLoaded = true;
   return cartLoaded;
+}
+
+void sdHeartbeat() {
+  if (!sdPresent) return;
+
+  // Quick check: attempt to open root. If it fails, assume SD removed.
+  SdFile root;
+  if (!root.open("/")) {
+    sdPresent  = false;
+    cartLoaded = false;
+    payloadCount = 0;
+    memset(&cartInfo, 0, sizeof(cartInfo));
+  }
+  root.close();
+}
+
+bool sdJustLoaded() {
+  return s_justLoaded;
+}
+
+void sdClearJustLoaded() {
+  s_justLoaded = false;
 }
 
 // ─── sdRunScript ──────────────────────────────────────────────────────────────

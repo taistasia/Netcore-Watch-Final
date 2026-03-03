@@ -303,14 +303,19 @@ void menuFxTick() {
   // Optional micro-jitter + scan-sweep only if perf budget is healthy
   bool perfOk = perfGetMaxStallMs() < 200;
 
-  // Pulse drives bracket brightness
+  // Pulse drives bracket brightness (Q16.16)
+  // Avoid float ops in hot UI tick; use fixed thresholds.
+  constexpr int32_t PULSE_T1  = 21626; // ~0.33 in Q16.16
+  constexpr int32_t PULSE_T2  = 43253; // ~0.66 in Q16.16
+  constexpr int32_t PULSE_ARM = 39322; // ~0.60 in Q16.16
+
   int32_t pQ = animGetQ(AT_MENU, AP_PULSE);
   // Map 0..1 to three discrete ink levels
-  uint16_t bc = (pQ > (int32_t)(0.66f * 65536.0f)) ? COL_FG()
-              : (pQ > (int32_t)(0.33f * 65536.0f)) ? COL_DIM()
+  uint16_t bc = (pQ > PULSE_T2) ? COL_FG()
+              : (pQ > PULSE_T1) ? COL_DIM()
               : COL_DARK();
 
-  int ARM  = (pQ > (int32_t)(0.6f * 65536.0f)) ? 11 : 7;
+  int ARM  = (pQ > PULSE_ARM) ? 11 : 7;
   int EARM = 13;
 
   // Draw corner brackets (terminal hover)
@@ -325,16 +330,22 @@ void menuFxTick() {
 
   // Select-pop flash: bright inner border that fades on selection change
   if (animIsActive(AT_MICRO, AP_SEL_PULSE)) {
+    // Q16.16 pulse thresholds (avoid float)
+    constexpr int32_t SEL_VIS = 9830;  // ~0.15 in Q16.16
+    constexpr int32_t SEL_BRT = 32768; // 0.50 in Q16.16
     int32_t sp = animGetQ(AT_MICRO, AP_SEL_PULSE);
     // Only draw when pulse is above threshold (visible)
-    if (sp > (int32_t)(0.15f * 65536.0f)) {
-      uint16_t popCol = (sp > (int32_t)(0.5f * 65536.0f)) ? COL_FG() : COL_DIM();
+    if (sp > SEL_VIS) {
+      uint16_t popCol = (sp > SEL_BRT) ? COL_FG() : COL_DIM();
       tft.drawRect(x + 1, y + 1, w - 2, h - 2, popCol);
     }
   }
 
   // Scan-sweep cursor (alien terminal vibe)
-  static int lastCursor = -9999;
+  // IMPORTANT: clear at the previous cursor Y/H; selection/top changes otherwise leave stripes.
+  static int lastCursorX = -9999;
+  static int lastCursorY = -9999;
+  static int lastCursorH = 0;
   int cx = animGetI(AT_MENU, AP_CURSOR_X);
   if (perfOk) {
     // Micro glitch jitter 0/1 px sometimes
@@ -344,15 +355,21 @@ void menuFxTick() {
   if (cx < x + 2) cx = x + 2;
   if (cx > x + w - 4) cx = x + w - 4;
 
-  // Dirty: clear old cursor band then draw new
-  if (lastCursor != -9999) {
-    int ox = lastCursor;
-    tft.fillRect(ox, y + 2, 3, h - 4, COL_HILITE());
+  // Dirty: only update if cursor moved or row changed.
+  const int curY = y + 2;
+  const int curH = h - 4;
+  if (cx != lastCursorX || curY != lastCursorY || curH != lastCursorH) {
+    // Clear old cursor band
+    if (lastCursorX != -9999 && lastCursorY != -9999 && lastCursorH > 0) {
+      tft.fillRect(lastCursorX, lastCursorY, 3, lastCursorH, COL_HILITE());
+    }
+    // Cursor: bright + dim trailing edge
+    tft.fillRect(cx,     curY, 2, curH, COL_FG());
+    tft.fillRect(cx - 2, curY, 1, curH, COL_DIM());
+    lastCursorX = cx;
+    lastCursorY = curY;
+    lastCursorH = curH;
   }
-  // Cursor: bright + dim trailing edge
-  tft.fillRect(cx,     y + 2, 2, h - 4, COL_FG());
-  tft.fillRect(cx - 2, y + 2, 1, h - 4, COL_DIM());
-  lastCursor = cx;
 }
 
 // ── App enter/exit slide transitions ──────────────────────────────────────────
