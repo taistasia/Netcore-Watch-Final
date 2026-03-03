@@ -139,6 +139,10 @@ const char* taskStatusLine() { return _statusLine; }
 // attempts tick() returns, so the UI and buttons remain responsive.
 #define PING_CONNECT_TIMEOUT_MS 400
 
+static int s_pingSock = -1;
+static uint32_t s_pingStartMs = 0;
+static bool s_pingInFlight = false;
+
 static PingTaskState _ping;
 
 void pingTaskStart(const char* host, int port, int count) {
@@ -165,48 +169,119 @@ void pingTaskStart(const char* host, int port, int count) {
 const PingTaskState* pingTaskGetState() { return &_ping; }
 
 static void _pingTick() {
-  if (_cancelReq) {
-    _ping.done      = true;
-    _ping.cancelled = true;
-    _job       = TASK_NONE;
-    _cancelReq = false;
-    _setStatus("CANCELLED");
+  if (!s_ping.active) return;
+
+  // Complete when we've sent all attempts
+  if (s_ping.sent >= s_ping.attempts) {
+    s_ping.active = false;
+    if (s_pingSock >= 0) { close(s_pingSock); s_pingSock = -1; }
+    s_pingInFlight = false;
+    snprintf(s_ping.status, sizeof(s_ping.status), "DONE ok:%u to:%u", s_ping.ok, s_ping.timeout);
     return;
   }
 
-  if (_ping.sent >= _ping.total) {
-    _ping.done = true;
-    _job       = TASK_NONE;
-    _progress  = 100;
-    char sl[32];
-    snprintf(sl, sizeof(sl), "DONE %d/%d", _ping.recv, _ping.total);
-    _setStatus(sl);
+  // If no connect in flight, start a new non-blocking connect attempt.
+  if (!s_pingInFlight) {
+    // We only support dotted-quad IP in non-blocking mode (hostname DNS can block).
+    ip4_addr_t ip;
+    if (!ip4addr_aton(s_ping.host, &ip)) {
+      s_ping.active = false;
+      snprintf(s_ping.status, sizeof(s_ping.status), "HOST MUST BE IP");
+      return;
+    }
+
+    if (s_pingSock >= 0) { close(s_pingSock); s_pingSock = -1; }
+    s_pingSock = lwip_socket(AF_INET, SOCK_STREAM, 0);
+    if (s_pingSock < 0) {
+      s_ping.active = false;
+      snprintf(s_ping.status, sizeof(s_ping.status), "SOCK FAIL");
+      return;
+    }
+
+    // Non-blocking socket
+    int flags = lwip_fcntl(s_pingSock, F_GETFL, 0);
+    lwip_fcntl(s_pingSock, F_SETFL, flags | O_NONBLOCK);
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t)s_ping.port);
+    addr.sin_addr.s_addr = ip.addr;
+
+    s_pingStartMs = millis();
+    int rc = lwip_connect(s_pingSock, (struct sockaddr*)&addr, sizeof(addr));
+    if (rc == 0) {
+      // Immediate success (rare)
+      s_ping.ok++;
+      s_ping.sent++;
+      s_ping.lastRttMs = 0;
+      snprintf(s_ping.status, sizeof(s_ping.status), "OK %s:%d", s_ping.host, s_ping.port);
+      close(s_pingSock);
+      s_pingSock = -1;
+      s_pingInFlight = false;
+      return;
+    }
+
+    // EINPROGRESS is expected for non-blocking connect
+    int e = errno;
+    if (e != EINPROGRESS && e != EALREADY) {
+      s_ping.timeout++;
+      s_ping.sent++;
+      snprintf(s_ping.status, sizeof(s_ping.status), "FAIL e:%d", e);
+      close(s_pingSock);
+      s_pingSock = -1;
+      s_pingInFlight = false;
+      return;
+    }
+
+    s_pingInFlight = true;
+    snprintf(s_ping.status, sizeof(s_ping.status), "PING %s:%d", s_ping.host, s_ping.port);
     return;
   }
 
-  // One attempt per tick — blocks for at most PING_CONNECT_TIMEOUT_MS ms
-  long t0 = (long)millis();
-  WiFiClient client;
-  bool ok = client.connect(_ping.host, (uint16_t)_ping.targetPort,
-                           PING_CONNECT_TIMEOUT_MS);
-  long rtt = (long)millis() - t0;
-  client.stop();
+  // In flight: poll connect completion with SO_ERROR
+  int so_err = 0;
+  socklen_t len = sizeof(so_err);
+  if (lwip_getsockopt(s_pingSock, SOL_SOCKET, SO_ERROR, &so_err, &len) == 0) {
+    if (so_err == 0) {
+      uint32_t rtt = millis() - s_pingStartMs;
+      s_ping.ok++;
+      s_ping.sent++;
+      s_ping.lastRttMs = (uint16_t)(rtt > 65535 ? 65535 : rtt);
+      snprintf(s_ping.status, sizeof(s_ping.status), "OK rtt:%lums", (unsigned long)rtt);
+      close(s_pingSock);
+      s_pingSock = -1;
+      s_pingInFlight = false;
+      return;
+    }
 
-  _ping.sent++;
-  _ping.lastRttMs = ok ? rtt : -1L;
-
-  if (ok) {
-    _ping.recv++;
-    _ping.totalMs += rtt;
-    if (rtt < _ping.minMs) _ping.minMs = rtt;
-    if (rtt > _ping.maxMs) _ping.maxMs = rtt;
+    // Still in progress? Some stacks report EINPROGRESS/ALREADY while connecting.
+    if (so_err == EINPROGRESS || so_err == EALREADY) {
+      // fallthrough to timeout check
+    } else {
+      s_ping.timeout++;
+      s_ping.sent++;
+      snprintf(s_ping.status, sizeof(s_ping.status), "FAIL e:%d", so_err);
+      close(s_pingSock);
+      s_pingSock = -1;
+      s_pingInFlight = false;
+      return;
+    }
   }
 
-  _progress = (_ping.sent * 100) / _ping.total;
-  char sl[32];
-  snprintf(sl, sizeof(sl), "PING %d/%d", _ping.sent, _ping.total);
-  _setStatus(sl);
+  // Timeout check
+  uint32_t elapsed = millis() - s_pingStartMs;
+  if (elapsed >= (uint32_t)PING_CONNECT_TIMEOUT_MS) {
+    s_ping.timeout++;
+    s_ping.sent++;
+    s_ping.lastRttMs = (uint16_t)(elapsed > 65535 ? 65535 : elapsed);
+    snprintf(s_ping.status, sizeof(s_ping.status), "TIMEOUT %lums", (unsigned long)elapsed);
+    close(s_pingSock);
+    s_pingSock = -1;
+    s_pingInFlight = false;
+  }
 }
+
 
 // =============================================================================
 // TASK_PORT_SCAN implementation

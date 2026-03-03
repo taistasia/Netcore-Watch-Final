@@ -36,6 +36,7 @@ static bool     _sensorOk    = false;
 static bool     _armed       = false;
 static uint32_t _lastPollMs  = 0;
 static uint32_t _scanCount   = 0;
+static uint32_t _lastScanMs = 0;
 
 // Last UID as ASCII string "04 A1 B2 C3" — empty if none yet
 static char     _lastUidStr[RFID_UID_STR_LEN] = { 0 };
@@ -78,6 +79,7 @@ static void _handleUid(const uint8_t* bytes, int len) {
   // Always format and store
   _formatUid(bytes, len, _lastUidStr, sizeof(_lastUidStr));
   _scanCount++;
+  _lastScanMs = now;
 
   // Anti-spam: same UID within cooldown → suppress notification
   bool sameUid      = (h == _lastNotifHash);
@@ -193,6 +195,7 @@ void rfidSvcSetArmed(bool armed) {
 bool     rfidSvcIsArmed()                             { return _armed;       }
 bool     rfidSvcSensorOk()                            { return _sensorOk;    }
 uint32_t rfidSvcScanCount()                           { return _scanCount;   }
+uint32_t rfidSvcLastScanMs()                        { return _lastScanMs; }
 
 bool rfidSvcGetLastUid(char* out, int outLen) {
   if (!out || outLen < 2) return false;
@@ -212,6 +215,7 @@ void     rfidSvcSetArmed(bool)           {}
 bool     rfidSvcIsArmed()                { return false; }
 bool     rfidSvcSensorOk()              { return false; }
 uint32_t rfidSvcScanCount()              { return 0; }
+uint32_t rfidSvcLastScanMs()            { return 0; }
 bool     rfidSvcGetLastUid(char* o, int l) {
   if (o && l > 0) o[0] = '\0';
   return false;

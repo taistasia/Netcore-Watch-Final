@@ -145,6 +145,19 @@ void statusBarInit() {
 }
 
 void statusBarTick() {
+  // SD insert/remove detection (no auto-mount). Keep it low-rate.
+  static uint32_t s_lastSdHb = 0;
+  uint32_t now = millis();
+  if ((uint32_t)(now - s_lastSdHb) >= 1000) {
+    s_lastSdHb = now;
+    sdHeartbeat();
+    if (sdJustLoaded()) {
+      // One-shot edge: cartridge became available.
+      _dirty = true;
+      sdClearJustLoaded();
+    }
+  }
+
   if (_dirty || _stateChanged()) {
     _draw();
   }

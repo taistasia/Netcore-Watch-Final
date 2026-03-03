@@ -66,3 +66,16 @@ const char* sdScriptLine(int i);
 int         sdScriptLineCount();
 int         sdScanPayloads();
 uint16_t    sdCartAccentColor();
+
+// Low-cost presence monitoring (no auto-mount). Intended to be called from an
+// already-ticking service (e.g. status bar) with a millis() gate.
+//
+// Behavior:
+// - If sdPresent is true, attempts a quick root open. On failure, clears sdPresent,
+//   cartLoaded, payloadCount.
+// - If sdPresent is false, does nothing (mount is user/task initiated).
+void        sdHeartbeat();
+
+// One-shot edge flag set when a cartridge manifest is successfully loaded.
+bool        sdJustLoaded();
+void        sdClearJustLoaded();

@@ -1,3 +1,4 @@
+# libraries.txt
 Adafruit GFX Library
 Adafruit ILI9341
 SdFat - Adafruit Fork
@@ -8,7 +9,6 @@ SdFat - Adafruit Fork
 # svc_tempir.cpp drives the MLX90614 via raw Wire (SMBus read).
 # TEMPIR_DEMO_MODE=1 (default): no hardware required.
 # TEMPIR_ENABLED=0: entire module compiles as no-ops.
-# MFRC522 by miguelbalboa — required ONLY when RFID_DEMO_MODE 0
 # Install via Arduino Library Manager: search "MFRC522"
-# RFID_DEMO_MODE=1 (default): no library needed, Wokwi-safe.
 # RFID_ENABLED=0: no library needed, full no-op stubs.
+MFRC522
